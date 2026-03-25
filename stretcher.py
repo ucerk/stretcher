@@ -40,6 +40,23 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout
                              QSlider, QLineEdit, QCheckBox, QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
 
+
+# =============================================================================
+# Helper class for the GUI
+# =============================================================================
+class BioSpeedBox(QDoubleSpinBox):
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Up:
+            self.setValue(self.value() + 0.5)
+        elif event.key() == Qt.Key.Key_Down:
+            self.setValue(self.value() - 0.5)
+        elif event.key() == Qt.Key.Key_Left:
+            self.setValue(self.value() - 0.01)
+        elif event.key() == Qt.Key.Key_Right:
+            self.setValue(self.value() + 0.01)
+        else:
+            super().keyPressEvent(event)
+
 # =============================================================================
 # HARDWARE ENGINE (The Background Worker)
 # =============================================================================
@@ -163,14 +180,24 @@ class StretcherGUI(QMainWindow):
         # GROUP 3: MOTION
         move_group = QGroupBox("3. Motion")
         ml = QVBoxLayout()
-        self.dist_label = QLabel("Stroke: 1.00mm")       # Show slider value
-        self.slider = QSlider(Qt.Orientation.Horizontal) # The drag-bar
+        self.dist_label = QLabel("Stroke: 1.00mm")
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(1, 500); self.slider.setValue(100)
-        self.slider.valueChanged.connect(self.update_dist) # Update text as you drag
-        self.speed_box = QDoubleSpinBox()                # Number input for speed
-        self.speed_box.setRange(1, 500); self.speed_box.setValue(30); self.speed_box.setSuffix(" mm/m")
-        ml.addWidget(self.dist_label); ml.addWidget(self.slider); ml.addWidget(self.speed_box)
+        self.slider.valueChanged.connect(self.update_dist)
         
+        # Use the custom BioSpeedBox class
+        self.speed_box = BioSpeedBox()
+        self.speed_box.setRange(0.001, 50.0) 
+        self.speed_box.setDecimals(3)      # Important for 0.01 precision
+        self.speed_box.setValue(10.0)      # Default starting speed
+        self.speed_box.setSingleStep(0.5)  # The clickable arrows jump by 0.5
+        self.speed_box.setSuffix(" mm/min")
+        self.speed_box.setToolTip("↑/↓: ±0.5 | ←/→: ±0.01") # Hint for the user
+        
+        ml.addWidget(self.dist_label)
+        ml.addWidget(self.slider)
+        ml.addWidget(self.speed_box)
+
         jg = QGridLayout()                               # 2x2 grid for manual jog buttons
         jog_btns = [("▶▶ Y ◀◀", 0, 0, "Y"), ("◀◀ Y ▶▶", 0, 1, "Y-"), 
                     ("▶▶ X ◀◀", 1, 0, "X"), ("◀◀ X ▶▶", 1, 1, "X-")]
@@ -246,7 +273,7 @@ class StretcherGUI(QMainWindow):
     def run_calibration(self, ax):
         base = 100.0 if ax == "X" else 120.0              # Assumed motor steps/mm
         new_val = (self.total_target / self.meas_in.value()) * base
-        self.cmd_queue.put(("GCODE", f"fM92 {ax}{new_val:.2f}")) # Update steps per mm
+        self.cmd_queue.put(("GCODE", f"M92 {ax}{new_val:.2f}")) # Update steps per mm
 
     def update_ui(self):
         while not self.res_queue.empty():                # Process all hardware messages in queue
