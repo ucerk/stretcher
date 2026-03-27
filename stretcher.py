@@ -37,7 +37,7 @@ import sys, serial, serial.tools.list_ports, time, multiprocessing, re
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                              QHBoxLayout, QWidget, QDoubleSpinBox, QLabel, 
                              QComboBox, QGroupBox, QGridLayout, QTextEdit, 
-                             QSlider, QLineEdit, QCheckBox, QMessageBox)
+                             QSlider, QLineEdit, QCheckBox, QMessageBox, QProgressBar)
 from PyQt6.QtCore import Qt, QTimer
 
 
@@ -47,13 +47,13 @@ from PyQt6.QtCore import Qt, QTimer
 class BioSpeedBox(QDoubleSpinBox):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Up:
-            self.setValue(self.value() + 0.5)
+            self.setValue(self.value() + 1)
         elif event.key() == Qt.Key.Key_Down:
-            self.setValue(self.value() - 0.5)
+            self.setValue(self.value() - 1)
         elif event.key() == Qt.Key.Key_Left:
-            self.setValue(self.value() - 0.01)
+            self.setValue(self.value() - 0.5)
         elif event.key() == Qt.Key.Key_Right:
-            self.setValue(self.value() + 0.01)
+            self.setValue(self.value() + 0.5)
         else:
             super().keyPressEvent(event)
 
@@ -71,6 +71,7 @@ def duet_worker(cmd_queue, res_queue, stop_event):
                         if ser and ser.is_open: ser.close() # Reset port if already open
                         ser = serial.Serial(data, 115200, timeout=0.01) # Open at high speed
                         time.sleep(0.5)                  # Wait for hardware handshake
+                        ser.write(b"M552 S0\nM564 H0 S0\nM17\n") # Disable network (idle)
                         ser.write(b"M564 H0 S0\nM17\n")  # Setup: Ignore limits & enable motors
                         res_queue.put(("STATUS", "CONNECTED")) # Send success back to GUI
                     except Exception as e:
@@ -182,17 +183,17 @@ class StretcherGUI(QMainWindow):
         ml = QVBoxLayout()
         self.dist_label = QLabel("Stroke: 1.00mm")
         self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(1, 500); self.slider.setValue(100)
+        self.slider.setRange(1, 1000); self.slider.setValue(100)
         self.slider.valueChanged.connect(self.update_dist)
-        
+               
         # Use the custom BioSpeedBox class
         self.speed_box = BioSpeedBox()
-        self.speed_box.setRange(0.001, 50.0) 
-        self.speed_box.setDecimals(3)      # Important for 0.01 precision
+        self.speed_box.setRange(0.4, 1000.0) 
+        self.speed_box.setDecimals(2)      # Important for 0.01 precision
         self.speed_box.setValue(10.0)      # Default starting speed
         self.speed_box.setSingleStep(0.5)  # The clickable arrows jump by 0.5
         self.speed_box.setSuffix(" mm/min")
-        self.speed_box.setToolTip("↑/↓: ±0.5 | ←/→: ±0.01") # Hint for the user
+        self.speed_box.setToolTip("↑/↓: ±1 | ←/→: ±0.5") # Hint for the user
         
         ml.addWidget(self.dist_label)
         ml.addWidget(self.slider)
@@ -201,22 +202,45 @@ class StretcherGUI(QMainWindow):
         jg = QGridLayout()                               # 2x2 grid for manual jog buttons
         jog_btns = [("▶▶ Y ◀◀", 0, 0, "Y"), ("◀◀ Y ▶▶", 0, 1, "Y-"), 
                     ("▶▶ X ◀◀", 1, 0, "X"), ("◀◀ X ▶▶", 1, 1, "X-")]
+        # Pass 1.0 for positive jog, -1.0 for negative jog
         for t, r, c, ax in jog_btns:
-            b = QPushButton(t); b.setFixedSize(110, 35) 
-            b.clicked.connect(lambda ch, a=ax: self.move_sd(a, 1)) # Connect axis to click
-            jg.addWidget(b, r, c)
+            b = QPushButton(t)
+            b.setFixedSize(110, 35) 
+            clean_ax = ax[0]   # 1. Strip the '-' so 'axis' is always just "X" or "Y"
+            # 2. Assign the direction based on the original string
+            d_val = -1.0 if '-' in ax else 1.0 # (If it has a '-', it's -1.0, otherwise 1.0)
+            # 3. Connect using dist=1.0. 
+            b.clicked.connect(lambda ch, a=clean_ax, d=d_val: self.move_sd(a, d))
+            jg.addWidget(b, r, c)          
         ml.addLayout(jg)
         
         sl = QHBoxLayout(); bs = QPushButton("STRETCH"); br = QPushButton("RETRACT")
-        bs.clicked.connect(lambda: self.move_sd("BOTH", -1)); br.clicked.connect(lambda: self.move_sd("BOTH", 1))
+        bs.clicked.connect(lambda: self.move_sd("BOTH", -1)) 
+        br.clicked.connect(lambda: self.move_sd("BOTH", 1))
         sl.addWidget(bs); sl.addWidget(br); ml.addLayout(sl)
         move_group.setLayout(ml); right_col.addWidget(move_group)
+        
+        # progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #bbb; border-radius: 5px; text-align: center; height: 20px; }
+            QProgressBar::chunk { background-color: #4CAF50; }
+        """)
+        outer_layout.addWidget(self.progress_bar)
+        # Initialize timing variables
+        self.move_timer = QTimer()
+        self.move_timer.timeout.connect(self.advance_progress)
+        self.start_time = 0
+        self.expected_duration = 0
 
         # GROUP 4: CALIBRATE
         cal_group = QGroupBox("4. Cal")
         cl = QHBoxLayout()
         self.meas_in = QDoubleSpinBox()                  # Input for measured distance
-        self.meas_in.setRange(0.01, 500); self.meas_in.setValue(1.0)
+        self.meas_in.setRange(0.01, 1000); self.meas_in.setValue(1.0)
         cx=QPushButton("X"); cy=QPushButton("Y"); btn_help = QPushButton("?"); btn_help.setFixedWidth(25)
         cx.clicked.connect(lambda: self.run_calibration("X")); cy.clicked.connect(lambda: self.run_calibration("Y"))
         btn_help.clicked.connect(self.show_cal_help)     # Instruction popup
@@ -251,20 +275,59 @@ class StretcherGUI(QMainWindow):
         self.cmd_queue.put(("GCODE", "M552 S-1\nM588 S\"*\"\nG4 P500\nM552 S0")) # Wipe all saved WiFis
 
     def show_cal_help(self):
-        QMessageBox.information(self, "Calibration", "1. Jog known dist.\n2. Measure actual.\n3. Input measured.\n4. Click X or Y.")
-
+        msg = QMessageBox(self)
+        msg.setWindowTitle("How to Calibrate Motors")
+        msg.setIcon(QMessageBox.Icon.Information)
+        
+        # Detailed HTML-formatted text for better readability
+        text = (
+            "<h3>Biaxial Calibration Guide</h3>"
+            "<p>If the stretcher moves 10mm on screen but 11mm in reality, follow these steps:</p>"
+            "<ol>"
+            "<li><b>Jog:</b> Move the axis a known distance (e.g., use the 'STRETCH' button to move 5mm).</li>"
+            "<li><b>Measure:</b> Use a digital caliper to measure the <i>actual</i> physical displacement of the grips.</li>"
+            "<li><b>Input:</b> Type that physical measurement into the 'Measured' box.</li>"
+            "<li><b>Update:</b> Click the <b>[X]</b> or <b>[Y]</b> button.</li>"
+            "</ol>"
+            "<p><i>Note: The software will automatically calculate the new 'Steps-per-mm' (M92) and send it to the Duet controller.</i></p>"
+        )
+        
+        msg.setText(text)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
+        
     def save_wifi(self):
         self.cmd_queue.put(("GCODE", f"M552 S0\nM587 S\"{self.ssid.text()}\" P\"{self.pw.text()}\"\nM552 S1"))
 
     def move_sd(self, axis, direction):
-        speed = self.speed_box.value()
-        dist = (self.total_target / 2.0) * direction      # Center-out movement math
-        g_move = f"G91\nG1 X{dist} Y{dist} F{speed/2.0}\nG90" if axis == "BOTH" else f"G91\nG1 {axis[0]}{dist if '-' not in axis else -self.total_target} F{speed}\nG90"
-        if self.sd_mode_toggle.isChecked():               # Logic to make movement "pausable"
-            full_cmd = f"M28 0:/sys/active.g\n{g_move}\nM29\nM32 0:/sys/active.g" # Write to SD and run
-        else:
-            full_cmd = g_move                             # Send directly via USB
-        self.cmd_queue.put(("GCODE", full_cmd))
+            # Always use the slider value (no more 1mm hardcoding)
+            target_dist = self.total_target
+            
+            # Math: Motor move is half the total gap change
+            motor_move = (target_dist / 2.0) * direction
+            motor_feedrate = self.speed_box.value() / 2.0
+            
+            # Time (s) = (Distance / Speed) * 60
+            if motor_feedrate > 0:
+                self.expected_duration = (abs(motor_move) / motor_feedrate) * 60
+                self.start_time = time.time()
+                self.progress_bar.setValue(0)
+                self.move_timer.start(100) # Update every 100ms
+            
+            # Build G-Code String
+            if axis == "BOTH":
+                g_move = f"G91\nG1 X{motor_move:.3f} Y{motor_move:.3f} F{motor_feedrate:.2f}\nG90"
+            else:
+                # Axis is "X" or "Y"
+                g_move = f"G91\nG1 {axis}{motor_move:.3f} F{motor_feedrate:.2f}\nG90"
+    
+            # The "Print" Logic (M28/M29)
+            if self.sd_mode_toggle.isChecked():
+                full_cmd = f"M28 0:/sys/active.g\nG4 P500\n{g_move}\nM29\nM32 0:/sys/active.g"
+            else:
+                full_cmd = g_move
+                
+            self.cmd_queue.put(("GCODE", full_cmd))
 
     def update_dist(self):
         self.total_target = self.slider.value()/100.0     # Convert slider (100) to mm (1.00)
@@ -272,8 +335,10 @@ class StretcherGUI(QMainWindow):
 
     def run_calibration(self, ax):
         base = 100.0 if ax == "X" else 120.0              # Assumed motor steps/mm
+        # New Steps = (What the UI thought it moved / What you actually measured) * Current Steps
         new_val = (self.total_target / self.meas_in.value()) * base
-        self.cmd_queue.put(("GCODE", f"M92 {ax}{new_val:.2f}")) # Update steps per mm
+        self.cmd_queue.put(("GCODE", f"M92 {ax}{new_val:.2f}")) # Send the update to the Duet (e.g., M92 Y102.45)
+        self.console.append(f"<b>CALIBRATION: {ax} set to {new_val:.2f} steps/mm</b>") # Log it to the console so you can see the change happened
 
     def update_ui(self):
         while not self.res_queue.empty():                # Process all hardware messages in queue
@@ -288,9 +353,33 @@ class StretcherGUI(QMainWindow):
                 # SPAM FILTER: Only print to console if it's NOT coordinates or "ok"
                 is_spam = any(x in rdata for x in ["ok", "X:", "Y:", "Z:", "T:0", "B:"])
                 if not is_spam: self.console.append(rdata) # Add line to log box
-            elif rtype == "STATUS": self.console.append(f"<b>>>> {rdata}</b>") # Bold status updates
+            elif rtype == "STATUS":
+                self.console.append(f"<b>>>> {rdata}</b>") # Bold status updates
+                # If we just connected or had an emergency stop, reset the bar
+                if "CONNECTED" in rdata or "RESET" in rdata or "OFFLINE" in rdata:
+                    self.reset_progress_ui()
             self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum()) # Auto-scroll
-
+    
+    def advance_progress(self):
+        elapsed = time.time() - self.start_time
+        if elapsed >= self.expected_duration:
+            self.progress_bar.setValue(100)
+            self.move_timer.stop()
+            # Optional: Add a 'Done' sound or log message here
+        else:
+            percentage = int((elapsed / self.expected_duration) * 100)
+            self.progress_bar.setValue(percentage)
+            # Display remaining time in the bar
+            remaining = self.expected_duration - elapsed
+            self.progress_bar.setFormat(f"Moving... {remaining:.1f}s left")
+    
+    def reset_progress_ui(self):
+        """Force stops the timer and clears the progress bar."""
+        self.move_timer.stop()
+        self.expected_duration = 0
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Idle")
+        
     def closeEvent(self, event):                         # Runs when user clicks [X]
         self.cmd_queue.put(("SHUTDOWN", "KILL"))         # Disable motors
         self.stop_event.set()                            # Stop the worker thread
