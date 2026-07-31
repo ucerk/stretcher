@@ -33,7 +33,7 @@
 # =============================================================================
 """
 # -*- coding: utf-8 -*-
-import sys, serial, serial.tools.list_ports, time, multiprocessing, re
+import sys, serial, serial.tools.list_ports, time, multiprocessing, re, math
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, QVBoxLayout, 
                              QHBoxLayout, QWidget, QDoubleSpinBox, QLabel, 
                              QComboBox, QGroupBox, QGridLayout, QTextEdit, 
@@ -118,7 +118,12 @@ class StretcherGUI(QMainWindow):
         main_widget = QWidget()                          # Create a base container
         self.setCentralWidget(main_widget)               # Place container in window
         outer_layout = QVBoxLayout(main_widget)          # Top-to-bottom layout
-
+        
+        # Reset timer
+        self.progress_reset_timer = QTimer(self)
+        self.progress_reset_timer.setSingleShot(True)
+        self.progress_reset_timer.timeout.connect(self.reset_progress_ui)
+        
         # --- READOUTS (Top Bar) ---
         disp_lyt = QHBoxLayout()                         # Left-to-right row for labels
         self.pos_display = QLabel("X: 0.00 | Y: 0.00")   # Create Position label
@@ -220,6 +225,18 @@ class StretcherGUI(QMainWindow):
         sl.addWidget(bs); sl.addWidget(br); ml.addLayout(sl)
         move_group.setLayout(ml); right_col.addWidget(move_group)
         
+        # Create a dedicated "Soft Stop" button
+        self.btn_soft_stop = QPushButton("STOP MOVEMENT (SOFT)")
+        self.btn_soft_stop.setStyleSheet("""
+            background-color: #FB8C00; 
+            color: white; 
+            font-weight: bold; 
+            height: 35px; 
+            border-radius: 5px;
+        """)
+        self.btn_soft_stop.clicked.connect(self.abort_movement)
+        ml.addWidget(self.btn_soft_stop)
+        
         # progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
@@ -300,35 +317,78 @@ class StretcherGUI(QMainWindow):
         self.cmd_queue.put(("GCODE", f"M552 S0\nM587 S\"{self.ssid.text()}\" P\"{self.pw.text()}\"\nM552 S1"))
 
     def move_sd(self, axis, direction):
-            # Always use the slider value (no more 1mm hardcoding)
-            target_dist = self.total_target
-            
-            # Math: Motor move is half the total gap change
-            motor_move = (target_dist / 2.0) * direction
-            motor_feedrate = self.speed_box.value() / 2.0
-            
-            # Time (s) = (Distance / Speed) * 60
-            if motor_feedrate > 0:
-                self.expected_duration = (abs(motor_move) / motor_feedrate) * 60
-                self.start_time = time.time()
-                self.progress_bar.setValue(0)
-                self.move_timer.start(100) # Update every 100ms
-            
-            # Build G-Code String
-            if axis == "BOTH":
-                g_move = f"G91\nG1 X{motor_move:.3f} Y{motor_move:.3f} F{motor_feedrate:.2f}\nG90"
-            else:
-                # Axis is "X" or "Y"
-                g_move = f"G91\nG1 {axis}{motor_move:.3f} F{motor_feedrate:.2f}\nG90"
+        # Prevent the previous movement's delayed reset
+        # from resetting this new movement.
+        self.progress_reset_timer.stop()
+        
+        sd_mode = self.sd_mode_toggle.isChecked()       # Read the checkbox once and reuse the same value below.
+        
+        target_dist = self.total_target
     
-            # The "Print" Logic (M28/M29)
-            if self.sd_mode_toggle.isChecked():
-                full_cmd = f"M28 0:/sys/active.g\nG4 P500\n{g_move}\nM29\nM32 0:/sys/active.g"
-            else:
-                full_cmd = g_move
-                
-            self.cmd_queue.put(("GCODE", full_cmd))
-
+        # One motor mechanically changes the separation between
+        # two opposing grippers.
+        motor_move = (target_dist / 2.0) * direction
+    
+        # GUI speed is the requested gripper-separation speed.
+        # The motor therefore runs at half that speed.
+        motor_feedrate = self.speed_box.value() / 2.0
+    
+        # This calculation was already correct.
+        if motor_feedrate > 0:
+            self.expected_duration = (abs(motor_move) / motor_feedrate) * 60.0
+           
+            # SD macro contains a 500 ms dwell before movement.
+            if sd_mode:
+                self.expected_duration += 0.5
+            
+            self.start_time = time.monotonic()
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Starting...")
+            self.move_timer.start(100)
+    
+        if axis == "BOTH":
+            # F is the XY vector speed. Multiply by sqrt(2)
+            # so that each individual motor runs at motor_feedrate.
+            xy_feedrate = motor_feedrate * math.sqrt(2.0)
+    
+            g_move = ("G91\n"
+                      f"G1 X{motor_move:.3f} "
+                      f"Y{motor_move:.3f} "
+                      f"F{xy_feedrate:.2f}\n"
+                      "G90")
+        else:
+            # For a single-axis movement, F is already the motor speed.
+            g_move = ("G91\n"
+                      f"G1 {axis}{motor_move:.3f} "
+                      f"F{motor_feedrate:.2f}\n"
+                      "G90")
+    
+        move_sequence = (f"{g_move}\n"
+                         "M400\n"
+                         'M118 P1 S"__MOVE_DONE__"')
+    
+        if sd_mode:
+            full_cmd = ("M28 0:/gcodes/active.g\n"
+                        "G4 P500\n"
+                        f"{move_sequence}\n"
+                        "M29\n"
+                        "M32 0:/gcodes/active.g")
+        else:
+            full_cmd = move_sequence
+    
+        self.cmd_queue.put(("GCODE", full_cmd))
+            
+    def abort_movement(self):
+        """ Stops the G-code file and keeps motors energized. """
+        # M0 stops the 'SD Print' initiated by your SD-Macro Mode
+        self.cmd_queue.put(("GCODE", "M0"))
+        
+        # Sync the GUI
+        self.move_timer.stop()
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("ABORTED - MOTORS HOLDING")
+        self.console.append("<b style='color: #FB8C00;'>>>> MOVEMENT ABORTED (M0)</b>")
+        
     def update_dist(self):
         self.total_target = self.slider.value()/100.0     # Convert slider (100) to mm (1.00)
         self.dist_label.setText(f"Stroke: {self.total_target:.2f}mm")
@@ -344,15 +404,23 @@ class StretcherGUI(QMainWindow):
         while not self.res_queue.empty():                # Process all hardware messages in queue
             rtype, rdata = self.res_queue.get_nowait()
             if rtype == "DATA":
-                m_pos = re.search(r"X:\s*([-+]?\d*\.\d+|\d+)", rdata) # Find X position using Regex
+                # Duet reports this only after M400 confirms movement completion
+                if "__MOVE_DONE__" in rdata:
+                    self.finish_movement()
+                    continue
+            
+                m_pos = re.search(r"X:\s*([-+]?\d*\.\d+|\d+)", rdata)
                 if m_pos:
-                    m_y = re.search(r"Y:\s*([-+]?\d*\.\d+|\d+)", rdata) # Find Y position
+                    m_y = re.search(r"Y:\s*([-+]?\d*\.\d+|\d+)", rdata)
                     self.pos_display.setText(f"X: {m_pos.group(1)} | Y: {m_y.group(1) if m_y else '0.00'}")
+                
                 m_temp = re.search(r"B:\s*([-+]?\d*\.\d+|\d+)", rdata) # Find Bed Temp using Regex
                 if m_temp: self.temp_display.setText(f"Temp: {m_temp.group(1)}°C")
+                
                 # SPAM FILTER: Only print to console if it's NOT coordinates or "ok"
                 is_spam = any(x in rdata for x in ["ok", "X:", "Y:", "Z:", "T:0", "B:"])
                 if not is_spam: self.console.append(rdata) # Add line to log box
+                
             elif rtype == "STATUS":
                 self.console.append(f"<b>>>> {rdata}</b>") # Bold status updates
                 # If we just connected or had an emergency stop, reset the bar
@@ -361,18 +429,39 @@ class StretcherGUI(QMainWindow):
             self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum()) # Auto-scroll
     
     def advance_progress(self):
-        elapsed = time.time() - self.start_time
-        if elapsed >= self.expected_duration:
-            self.progress_bar.setValue(100)
+        if self.expected_duration <= 0:  # avoid divsion by 0
             self.move_timer.stop()
-            # Optional: Add a 'Done' sound or log message here
-        else:
-            percentage = int((elapsed / self.expected_duration) * 100)
-            self.progress_bar.setValue(percentage)
-            # Display remaining time in the bar
-            remaining = self.expected_duration - elapsed
-            self.progress_bar.setFormat(f"Moving... {remaining:.1f}s left")
+            return
     
+        elapsed = time.monotonic() - self.start_time
+    
+        if elapsed >= self.expected_duration:
+            # The estimate has elapsed, but the Duet has not yet
+            # confirmed completion.
+            self.move_timer.stop()
+            self.progress_bar.setValue(99)
+            self.progress_bar.setFormat("Finishing...")
+            return
+    
+        percentage = int((elapsed / self.expected_duration) * 100)
+        percentage = max(0, min(99, percentage))
+    
+        remaining = max(0.0, self.expected_duration - elapsed)
+    
+        self.progress_bar.setValue(percentage)
+        self.progress_bar.setFormat(f"Moving... {remaining:.1f}s left")
+            
+    def finish_movement(self):
+        """Called after the Duet confirms movement completion."""
+        self.move_timer.stop()
+        self.expected_duration = 0
+    
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Complete")
+    
+        # Display Complete for one second, then return to Idle
+        self.progress_reset_timer.start(1000)
+        
     def reset_progress_ui(self):
         """Force stops the timer and clears the progress bar."""
         self.move_timer.stop()
