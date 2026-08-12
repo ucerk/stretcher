@@ -464,7 +464,7 @@ class StretcherGUI(QMainWindow):
         heat_group = QGroupBox("2. Heat")
         htl = QVBoxLayout()
         self.t_set = QDoubleSpinBox()                    # Number input for temp
-        self.t_set.setRange(0, 50); self.t_set.setValue(37.0); self.t_set.setSuffix("°C")
+        self.t_set.setRange(0, 40); self.t_set.setValue(37.0); self.t_set.setSuffix("°C")
         btn_h_on = QPushButton("SET"); btn_h_off = QPushButton("OFF")
         btn_h_on.clicked.connect(lambda: self.cmd_queue.put(("GCODE", f"M140 H0 S{self.t_set.value()}")))
         btn_h_off.clicked.connect(lambda: self.cmd_queue.put(("GCODE", "M140 H-1"))) # H-1 disables heater
