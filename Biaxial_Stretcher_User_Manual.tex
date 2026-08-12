@@ -1,0 +1,635 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================================
+% USER MANUAL: CUSTOM-BUILT BIAXIAL STRETCHER
+% Designed to compile in TeXworks using pdfLaTeX.
+% ============================================================
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.2cm,headheight=15pt]{geometry}
+\usepackage{microtype}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{siunitx}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+
+\definecolor{ManualBlue}{RGB}{31,78,121}
+\definecolor{ManualGray}{RGB}{235,239,243}
+\definecolor{WarningRed}{RGB}{150,30,30}
+\definecolor{NoteBlue}{RGB}{235,244,252}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ManualBlue,
+  urlcolor=ManualBlue,
+  citecolor=ManualBlue,
+  pdftitle={User Manual: Custom-Built Biaxial Stretcher},
+  pdfauthor={Biaxial Stretcher Project}
+}
+
+\newcommand{\manualtitle}{Custom-Built Biaxial Stretcher User Manual}
+\newcommand{\manualversion}{1.0}
+\newcommand{\softwareversion}{9.6.1}
+\newcommand{\manualdate}{\today}
+\newcommand{\checkbox}{\(\square\)}
+
+\newcommand{\warningbox}[1]{%
+  \begin{center}
+  \fcolorbox{WarningRed}{white}{%
+    \begin{minipage}{0.91\textwidth}
+    \textbf{WARNING:} #1
+    \end{minipage}}
+  \end{center}
+}
+
+\newcommand{\notebox}[1]{%
+  \begin{center}
+  \fcolorbox{ManualBlue}{NoteBlue}{%
+    \begin{minipage}{0.91\textwidth}
+    \textbf{Note:} #1
+    \end{minipage}}
+  \end{center}
+}
+
+\newcommand{\screenshotbox}[1]{%
+  \begin{center}
+  \fcolorbox{ManualBlue}{ManualGray}{%
+    \begin{minipage}[c][3.2cm][c]{0.88\textwidth}
+    \centering
+    \textbf{Screenshot placeholder}\\[0.4em]
+    #1
+    \end{minipage}}
+  \end{center}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Biaxial Stretcher}
+\chead{\small User Manual}
+\rhead{\small Version \manualversion}
+\lfoot{\small GUI software v\softwareversion}
+\cfoot{\small Page \thepage\ of \pageref{LastPage}}
+\rfoot{\small \manualdate}
+
+\titleformat{\section}{\large\bfseries\color{ManualBlue}}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{ManualBlue}}{\thesubsection.}{0.6em}{}
+\setlist[itemize]{leftmargin=1.5em,itemsep=0.25em,topsep=0.35em}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=0.35em,topsep=0.35em}
+\renewcommand{\arraystretch}{1.22}
+
+\begin{document}
+
+% -------------------- TITLE PAGE --------------------
+\begin{titlepage}
+\centering
+\vspace*{2.0cm}
+{\Huge\bfseries\color{ManualBlue} USER MANUAL\par}
+\vspace{0.8cm}
+{\LARGE\bfseries Custom-Built Biaxial Stretcher\par}
+\vspace{0.5cm}
+{\large Duet 2 WiFi / RepRapFirmware control system\par}
+\vspace{1.5cm}
+
+\begin{tabularx}{0.88\textwidth}{>{\bfseries}p{0.32\textwidth} X}
+\toprule
+Manual version & \manualversion \\
+GUI software version & \softwareversion \\
+Document date & \manualdate \\
+Controller & Duet 2 WiFi / Ethernet family \\
+Primary local interface & Biaxial Stretcher PyQt6 GUI over USB serial \\
+Network interface & Duet Web Control (DWC) in a web browser \\
+GitHub repository &
+\href{https://github.com/ucerk/stretcher.git}
+{\texttt{https://github.com/ucerk/stretcher.git}} \\
+\bottomrule
+\end{tabularx}
+
+\vfill
+\begin{minipage}{0.88\textwidth}
+This manual explains how to connect to the stretcher, use the custom graphical user interface, configure Wi-Fi, access Duet Web Control, perform routine movements and heating operations, and shut down the system safely.
+\end{minipage}
+\vfill
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ============================================================
+\section{Purpose and system overview}
+% ============================================================
+
+The biaxial stretcher is controlled by a Duet controller running RepRapFirmware. The custom desktop GUI communicates with the Duet through a USB serial connection and provides simplified controls for motion, heating, calibration, Wi-Fi setup, pause/resume, and emergency stopping.
+
+The system can be accessed in three complementary ways:
+\begin{enumerate}
+  \item \textbf{Custom GUI over USB} -- the normal interface for day-to-day operation of the stretcher.
+  \item \textbf{Duet Web Control (DWC)} -- a browser-based interface available when the Duet and the computer are connected to the same network.
+  \item \textbf{PanelDue} -- if installed, provides local status and selected job-control functions such as pause/cancel for SD-card jobs.
+\end{enumerate}
+
+\notebox{The USB GUI and Duet Web Control may both be connected at the same time. However, do not issue competing movement commands from two interfaces simultaneously. Use one interface as the active control point for motion.}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.90\textwidth]{biaxial_stretcher_photo.png}
+    \caption{Complete biaxial stretcher, Duet controller (hidden), and Panel Due.}
+    \label{fig:stretcher-overview}
+\end{figure}
+
+% ============================================================
+\section{Safety information}
+% ============================================================
+
+\warningbox{The stretcher contains powered motors, moving grips, stored elastic energy, a heater, and exposed electronics. Keep hands, tools, cables, and loose material clear of moving parts whenever the motors are enabled.}
+
+Before each use:
+\begin{itemize}
+  \item inspect the frame, grips, leadscrews, couplings, cables, heater wiring, and controller;
+  \item confirm that no object can obstruct X or Y motion;
+  \item confirm that the specimen and fixtures are mounted securely;
+  \item verify that the selected stroke and speed are appropriate before pressing a movement button;
+  \item verify that the temperature setpoint is suitable for the experiment;
+  \item know how to remove main power if the software emergency stop is insufficient.
+\end{itemize}
+
+The GUI contains a \textbf{HARD EMERGENCY STOP (M112)} button. This sends RepRapFirmware command \texttt{M112}. After an emergency stop, the Duet must be reset before normal operation can continue. The GUI indicates that the PanelDue STOP/reset procedure must be completed before reconnecting.
+
+% ============================================================
+\section{Computer and connection requirements}
+% ============================================================
+
+For normal operation you need:
+\begin{itemize}
+  \item the biaxial stretcher and Duet controller;
+  \item a USB cable between the Duet and the computer;
+  \item the Biaxial Stretcher GUI;
+  \item for network access, a 2.4~GHz Wi-Fi network or phone hotspot;
+  \item a modern web browser for Duet Web Control.
+\end{itemize}
+
+The Duet 2 WiFi uses 2.4~GHz Wi-Fi. A 5~GHz-only hotspot or wireless network cannot be used by the Duet. If a phone hotspot is used, enable a 2.4~GHz or compatibility mode if the phone provides that option.
+
+% ============================================================
+\section{Connecting to the stretcher by USB}
+% ============================================================
+
+\subsection{Physical connection}
+\begin{enumerate}
+  \item Make sure the stretcher is in a safe mechanical state and that no movement will cause a collision.
+  \item Connect the Duet to the computer using the USB cable.
+  \item Apply the normal stretcher power supply when motor or heater operation is required.
+  \item Start the Biaxial Stretcher GUI.
+\end{enumerate}
+
+\subsection{Selecting the serial port}
+The GUI automatically lists serial ports detected by \texttt{pyserial}.
+
+\notebox{If the GUI is stated before connecting the stretcher to the computer/laptop, the serial ports won't be listed! Close and restart the software.}
+
+Typical names are:
+\begin{itemize}
+  \item \textbf{Windows:} \texttt{COM3}, \texttt{COM4}, etc.
+  \item \textbf{macOS:} \texttt{/dev/tty.usbmodem...}
+\end{itemize}
+
+Select the Duet port from the drop-down list and press \textbf{CONNECT}.
+
+When the GUI connects, it sends initial controller commands that:
+\begin{itemize}
+  \item place Wi-Fi in idle mode with \texttt{M552 S0};
+  \item allow movement with \texttt{M564 H0 S0};
+  \item enable the motors with \texttt{M17}.
+\end{itemize}
+
+\warningbox{Because pressing CONNECT enables the motors, connect only when the mechanism is clear and safe to energize. Also note that the motors may jolt upon cenergizing which could affect the sample!}
+
+\notebox{The GUI intentionally sends \texttt{M552 S0} when connecting. Therefore, a Wi-Fi connection that was previously active may be placed into idle mode. Re-enable Wi-Fi using the GUI after the USB connection is established.}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.40\textwidth]{gui_connect_module.png}
+    \caption{Setup module of the GUI with controls for connecting to the Duet Due (via a USB cable) and WiFi (for configuring the Duet).}
+    \label{fig:gui-overview}
+\end{figure}
+
+% ============================================================
+\section{Connecting the Duet and computer to the same Wi-Fi network}
+% ============================================================
+
+\subsection{Option A: phone hotspot}
+A phone hotspot is convenient when no laboratory router is available or when the laboratory network cannot be used. Institutional networks may require device registration, browser-based authentication, user credentials, or other security settings that are not supported by the Duet. In addition, network segmentation or wireless-client isolation may prevent the laptop from accessing the Duet even when both devices appear to be connected. In these situations, a private phone hotspot provides a simpler local network for the laptop and Duet.
+
+\notebox{An unfamiliar IP address is not necessarily an error. Laboratory networks may use a different private address range from the expected \texttt{192.168.x.x} range. However, if the Duet does not obtain an address, or if the laptop and Duet are placed on isolated network segments, Duet Web Control may not be accessible. Use a private phone hotspot instead.}
+
+\begin{enumerate}
+  \item Enable the phone hotspot.
+  \item Ensure that the hotspot is operating in a mode compatible with 2.4~GHz Wi-Fi.
+  \item Connect the laptop to the phone hotspot in the normal way.
+  \item Connect the laptop to the Duet by USB and open the Biaxial Stretcher GUI.
+  \item Press \textbf{CONNECT} in the GUI.
+  \item Enter the hotspot name into the \textbf{SSID} field.
+  \item Enter the hotspot password into the \textbf{Pass} field.
+  \item Press \textbf{SAVE WIFI}.
+  \item Allow several seconds for the Duet to join the hotspot.
+\end{enumerate}
+
+
+The GUI's \textbf{SAVE WIFI} function performs the equivalent of:
+\begin{verbatim}
+M552 S0
+M587 S"network-name" P"network-password"
+M552 S1
+\end{verbatim}
+
+The \texttt{M587} command stores the network credentials in the Duet Wi-Fi module. The credentials therefore do not normally need to be entered after every power cycle.
+
+\subsection{Option B: laboratory or local Wi-Fi network}
+The procedure is the same as for a phone hotspot:
+\begin{enumerate}
+  \item Connect the laptop to the required local Wi-Fi network.
+  \item Confirm that the network provides 2.4~GHz Wi-Fi access.
+  \item Connect to the Duet through USB in the GUI.
+  \item Enter the local network SSID and password.
+  \item Press \textbf{SAVE WIFI}.
+\end{enumerate}
+
+\subsection{Re-enabling a previously saved Wi-Fi network}
+If the credentials are already stored, it is not necessary to press \textbf{SAVE WIFI} again. After connecting by USB, press the GUI button labelled \textbf{WIFI: OFF}. The button sends \texttt{M552 S1} and changes to \textbf{WIFI: ON}.
+
+\subsection{Resetting saved Wi-Fi credentials}
+The GUI \textbf{RESET} button beside the Wi-Fi control clears all stored Wi-Fi network credentials. It first places the Wi-Fi module in idle mode, allowing the reset command to be processed, and then disables the module after the reset. It sends commands equivalent to:
+\begin{verbatim}
+M552 S0
+G4 P500
+M588 S"*"
+G4 P500
+M552 S-1
+\end{verbatim}
+
+\warningbox{The Wi-Fi RESET button erases remembered Wi-Fi networks. Use it only when you intentionally want to remove the stored SSID/password configuration.}
+
+% ============================================================
+\section{Finding the Duet IP address}
+% ============================================================
+
+Duet Web Control is opened using the Duet's network address. When DHCP is used, the router or phone hotspot assigns that address automatically.
+
+Possible ways to find the IP address are:
+\begin{itemize}
+  \item note the IP address reported by the Duet when Wi-Fi connects. It appears in the GUI console ot in the PanelDue Console;
+  \item view the connected-device list in the router or phone hotspot;
+  \item connect by USB with a serial terminal and send \texttt{M552}.
+\end{itemize}
+
+Sending \texttt{M552} with no parameters reports the current network state and IP address.
+
+\notebox{The custom GUI does not currently provide a general-purpose G-code command entry box. If you need to send \texttt{M552} manually over USB, close the GUI first so another serial terminal, for example YAT, can open the Duet serial port.}
+
+% ============================================================
+\section{Opening Duet Web Control}
+\label{sec:duet-web-control}
+% ============================================================
+
+Once the laptop and Duet are on the same network:
+\begin{enumerate}
+  \item Open a web browser on the laptop.
+  \item Enter the Duet IP address, for example \texttt{http://192.168.1.90/}.
+  \item Alternatively, try \texttt{http://Stretcher.local/}.
+  \item Duet Web Control should load in the browser.
+\end{enumerate}
+
+Duet Web Control provides access to controller status, files, configuration, the G-code console, heater controls, movement controls, job controls, and firmware/configuration tools.
+
+\warningbox{On a standalone Duet, Duet Web Control normally uses HTTP rather than HTTPS. Use it only on a trusted local network or private hotspot. Do not expose the Duet directly to an untrusted or public network.}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{DuetWebControl.png}
+    \caption{Web based Duet control center.}
+    \label{fig:duet-web-control}
+\end{figure}
+
+% ============================================================
+\section{GUI overview}
+% ============================================================
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{gui_labelled.png}
+    \caption{GUI overview.}
+    \label{fig:stretcher-overview}
+\end{figure}
+
+The GUI is divided into several functional areas.
+
+\subsection{Position and temperature readouts}
+At the top of the window:
+\begin{itemize}
+  \item \textbf{X / Y} displays the latest coordinates reported by the Duet;
+  \item \textbf{Temp} displays the bed/heater temperature reported by the controller.
+\end{itemize}
+
+The GUI periodically requests position, temperature, and controller job status from the Duet.
+
+\subsection{SD-Macro Mode}
+The checkbox \textbf{SD-Macro Mode (Enables PanelDue Pause/Cancel)} changes how normal movements are executed.
+
+When enabled, the GUI writes the movement to an SD-card G-code file and starts it as a Duet job. This enables cleaner pause/resume interaction using \texttt{M25}/\texttt{M24} and PanelDue job controls.
+
+For a simple direct USB move, leave SD-Macro Mode unchecked unless SD pause/cancel behavior is required.
+
+% ============================================================
+\section{Setup controls}
+% ============================================================
+
+The \textbf{1. Setup} group contains:
+\begin{description}[style=nextline,leftmargin=4.2cm,labelwidth=3.7cm]
+  \item[Serial-port list] Selects the USB serial connection to the Duet.
+  \item[CONNECT] Opens the serial connection and performs the initial controller setup.
+  \item[SSID] Wi-Fi network name.
+  \item[Pass] Wi-Fi password; displayed as hidden characters.
+  \item[SAVE WIFI] Stores the selected network on the Duet and enables Wi-Fi.
+  \item[WIFI: OFF / ON] Enables or idles Wi-Fi without changing the saved credentials.
+  \item[RESET] Erases the Duet's remembered Wi-Fi networks.
+\end{description}
+
+% ============================================================
+\section{Heating controls}
+% ============================================================
+
+The \textbf{2. Heat} group contains a temperature input and two buttons.
+
+\begin{itemize}
+  \item The temperature control range is \SI{0}{\celsius} to \SI{40}{\celsius}.
+  \item The default displayed setpoint is \SI{37}{\celsius}.
+  \item Pressing \textbf{SET} sends \texttt{M140 H0 S<temperature>}.
+  \item Pressing \textbf{OFF} sends \texttt{M140 H-1} to disable the heater.
+\end{itemize}
+
+The temperature displayed at the top of the GUI is the temperature reported by the Duet. The Python program does not perform PID control itself; temperature regulation is handled by RepRapFirmware on the Duet.
+
+\warningbox{Confirm the correct heater and sensor configuration before use. Do not rely on the GUI setpoint alone when validating a temperature-sensitive experiment.}
+
+% ============================================================
+\section{Motion controls}
+% ============================================================
+
+\subsection{Stroke}
+The horizontal \textbf{Stroke} slider defines the commanded change in separation.
+
+The current software uses a slider range of 1 to 1000 internal units, with 100 units corresponding to \SI{1.00}{mm}. Therefore the selectable displayed range is approximately \SI{0.01}{mm} to \SI{10.00}{mm}.
+
+For the slider keyboard controls:
+\begin{itemize}
+  \item $\leftarrow$/$\rightarrow$: decrease/increase by \SI{0.01}{mm};
+  \item  $\downarrow$/$\uparrow$: decrease/increase by \SI{0.10}{mm}.
+\end{itemize}
+
+\subsection{Continuous separation speed}
+The speed field defines the requested \textbf{separation speed} in \si{mm/min}. The software converts this to the required motor feed rate internally.
+
+The current continuous-mode minimum is \SI{1.20}{mm/min}. Lower average rates must use \textbf{Timed stepped move} mode.
+
+\notebox{In the currently supplied v9.6.1 source, the custom speed-box keyboard handler uses Up/Down increments of 1.0 and Left/Right increments of 0.5. If the intended behavior is Up/Down = 0.10 and Left/Right = 0.01, update the source code available on github.}
+
+\subsection{Timed stepped move}
+Enable \textbf{Timed stepped move (SD only)} when an average separation rate below the continuous RepRapFirmware motion floor is required.
+
+\warningbox{The time stepped motion is \textbf{not continuous}, but happens in internally calculated steps based on the calibration.}
+
+When enabled:
+\begin{itemize}
+  \item SD mode is forced on;
+  \item the normal speed box is disabled;
+  \item the duration field becomes active;
+  \item the GUI distributes complete motor microsteps across the selected duration;
+  \item the average rate is displayed as stroke divided by duration.
+\end{itemize}
+
+The duration control supports approximately 1 to 1440 minutes.
+
+\subsection{X and Y jog buttons}
+The four jog buttons move either the X or Y axis using the currently selected stroke and movement mode. The arrow symbols indicate whether the grips move in the positive or negative configured direction.
+
+Perform the first jog after setup at a small stroke and verify the physical direction before using a larger movement.
+
+\subsection{STRETCH and RETRACT}
+\textbf{STRETCH} and \textbf{RETRACT} command both X and Y axes together.
+
+For a biaxial move, the software compensates the vector feed rate so that the individual X and Y motor speeds correspond to the requested separation speed.
+
+\warningbox{Always verify the selected stroke and direction before pressing STRETCH or RETRACT. Movement begins when the command is sent; there is no additional confirmation dialog.}
+
+% ============================================================
+\section{Pause, resume, progress, and emergency stop}
+% ============================================================
+
+\subsection{Pause and resume}
+The \textbf{PAUSE SD MOVEMENT} button is enabled only during SD-card movements.
+
+\begin{itemize}
+  \item Pause sends \texttt{M25}.
+  \item Resume sends \texttt{M24}.
+  \item The GUI monitors the Duet job state and updates the button as the controller enters pausing, paused, resuming, or processing states.
+\end{itemize}
+
+Direct USB movements cannot use the same SD-job pause mechanism.
+
+\subsection{Progress bar}
+For normal moves, the GUI estimates progress from the requested distance and speed. For timed stepped protocols, progress is reported by messages generated by the SD job itself.
+
+\subsection{Hard emergency stop}
+Pressing \textbf{HARD EMERGENCY STOP (M112)} immediately sends the Duet emergency-stop command and closes the serial connection.
+
+After an emergency stop:
+\begin{enumerate}
+  \item ensure that all physical motion has stopped;
+  \item remove the cause of the emergency;
+  \item reset the Duet using by pressing the \textbf{STOP} button in the top-left corner of the Panel Due;
+  \item reconnect only when the mechanism is safe.
+\end{enumerate}
+
+\warningbox{After an emergency stop, reconnecting to the device re-energizes the stepper motors. The motors may make a \textbf{small, sudden movement} as the rotor aligns with the magnetic field established by the stepper driver. This movement may affect the sample.}
+
+% ============================================================
+\section{Calibration control}
+% ============================================================
+
+The \textbf{4. Cal} group provides a simple displacement calibration adjustment.
+
+\begin{enumerate}
+  \item Command a known stroke.
+  \item Measure the actual physical separation change using a suitable measurement tool.
+  \item Enter the measured value in the calibration input box.
+  \item Press \textbf{X} or \textbf{Y} for the axis being calibrated.
+\end{enumerate}
+
+The software calculates a scale factor:
+\[
+\text{scale} = \frac{\text{commanded stroke}}{\text{measured stroke}}
+\]
+
+and sends an \texttt{M92} command that scales the \textbf{current live} steps-per-mm value for the selected axis.
+
+\notebox{The calibration takes effect immediately but is not automatically saved to the permanent Duet configuration. To retain the calibrated steps-per-mm value after a restart, update the corresponding \texttt{M92} value in \texttt{config.g} via Duet Web Control; see \hyperref[sec:duet-web-control]{Opening Duet Web Control}.}
+
+% ============================================================
+\section{Console}
+% ============================================================
+
+The black console area at the bottom of the GUI shows status messages, network information, calibration reports, movement events, and errors. Repetitive position, temperature, and \texttt{ok} responses are filtered to keep the display readable.
+
+Use the console when diagnosing:
+\begin{itemize}
+  \item serial connection failures;
+  \item Wi-Fi connection messages;
+  \item SD upload errors;
+  \item timed-protocol errors;
+  \item calibration responses;
+  \item controller warnings.
+\end{itemize}
+
+% ============================================================
+\section{Recommended normal operating sequence}
+% ============================================================
+
+\begin{enumerate}
+  \item Inspect the stretcher and clear the motion area.
+  \item Connect the Duet to the computer by USB.
+  \item Connect to power supply (to operate the motors/heater).
+  \item Start the GUI.
+  \item Select the Duet serial port and press \textbf{CONNECT}.
+  \item If network access is required, enable Wi-Fi or save the current network credentials.
+  \item Verify the live position and temperature readouts.
+  \item If required, set the heater temperature and allow the system to stabilize.
+  \item Select a small stroke and verify X/Y motion direction before mounting or loading a critical specimen.
+  \item Mount the specimen using the approved fixture procedure.
+  \item Select stroke, speed, SD mode, or timed stepped mode as required.
+  \item Execute the required X/Y or biaxial movement.
+  \item Monitor the specimen, temperature, position, progress bar, and controller messages throughout the movement.
+  \item Use SD pause/resume (only for SD-card movements).
+  \item At the end of the session, switch the heater off and return the mechanism to a safe unloaded state.
+  \item Close the GUI normally. On close, the program requests \texttt{M18}, disabling the X/Y motors and removing holding current before the serial worker exits.
+  \item Disconnect the stretcher power supply.
+\end{enumerate}
+
+% ============================================================
+\section{Using Duet Web Control}
+% ============================================================
+
+DWC is useful for controller-level diagnostics and configuration that are intentionally not exposed in the simplified stretcher GUI.
+
+Typical uses include:
+\begin{itemize}
+  \item viewing controller state and temperatures;
+  \item sending diagnostic G-code from the Console page;
+  \item checking network state with \texttt{M552};
+  \item inspecting or editing \texttt{config.g};
+  \item viewing files stored on the Duet SD card;
+  \item reviewing heater configuration and tuning;
+  \item checking firmware and machine configuration.
+\end{itemize}
+
+\warningbox{DWC provides lower-level control than the custom GUI. Editing configuration or sending arbitrary G-code can change motion, heater, network, and safety behavior. Restrict configuration changes to trained users.}
+
+% ============================================================
+\section{Troubleshooting}
+% ============================================================
+
+\begin{longtable}{p{0.28\textwidth} p{0.31\textwidth} p{0.33\textwidth}}
+\toprule
+Problem & Likely cause & Action \\
+\midrule
+\endhead
+No serial port appears & USB cable, driver, port, or power issue & Reconnect USB, try another data-capable cable/port, and check the operating-system device list. \\
+GUI reports OFFLINE & Wrong serial port or port already in use & Select the correct port. Close other serial-terminal software and reconnect. \\
+Wi-Fi will not connect & Wrong SSID/password, 5~GHz-only network, weak signal & Confirm exact credentials, use 2.4~GHz Wi-Fi, simplify hotspot settings, and retry SAVE WIFI. \\
+Wi-Fi worked before CONNECT but DWC disappears & GUI CONNECT sends \texttt{M552 S0} & Press WIFI: OFF/ON to re-enable Wi-Fi, or use SAVE WIFI if credentials must be changed. \\
+Cannot find DWC address & DHCP assigned an unknown IP & Check router/hotspot clients, use the mDNS name, or query \texttt{M552} through a serial terminal. \\
+Browser changes HTTP to HTTPS & Browser security behavior & Enter the explicit \texttt{http://} address. Standalone DWC does not normally provide HTTPS. \\
+Axis moves in unexpected direction & Direction/configuration mismatch & Stop immediately and verify axis configuration before continuing. \\
+Timed protocol reports an error & Stroke below a motor step or selected duration too short & Increase the stroke or duration and retry. \\
+Pause button is disabled & Movement is direct USB, not an SD job & Use SD-Macro Mode if pause/resume capability is required. \\
+Temperature differs from target & Heater model, PID tuning, sensor placement, or calibration issue & Verify heater configuration and sensor accuracy; perform controller-level heater tuning where appropriate. \\
+Emergency stop was triggered & Duet is halted & Make the mechanism safe, reset the Duet, then reconnect. \\
+\bottomrule
+\end{longtable}
+
+% ============================================================
+\section{Useful Duet commands}
+% ============================================================
+
+\begin{tabularx}{\textwidth}{p{0.28\textwidth} X}
+\toprule
+Command & Purpose \\
+\midrule
+\texttt{M552} & Report current network state and IP address. \\
+\texttt{M552 S0} & Start/leave Wi-Fi module in idle mode. \\
+\texttt{M552 S1} & Enable Wi-Fi client mode and connect to a remembered network. \\
+\texttt{M587 S"SSID" P"password"} & Store Wi-Fi network credentials. \\
+\texttt{M587} & List remembered Wi-Fi networks. \\
+\texttt{M588 S"*"} & Forget remembered Wi-Fi networks. \\
+\texttt{M115} & Report firmware information. \\
+\texttt{M140 H0 S37} & Example: set heater 0 target to \SI{37}{\celsius}. \\
+\texttt{M140 H-1} & Disable the configured bed/heater output used by the GUI. \\
+\texttt{M25} & Pause an SD job. \\
+\texttt{M24} & Resume an SD job. \\
+\texttt{M112} & Emergency stop. \\
+\texttt{M18} & Disable motors/remove holding current. \\
+\bottomrule
+\end{tabularx}
+
+% ============================================================
+\section{Shutdown and storage}
+% ============================================================
+
+\begin{enumerate}
+  \item Finish or abort any active movement.
+  \item Return the specimen and mechanism to a safe unloaded state.
+  \item Switch the heater off.
+  \item Save any required experimental records.
+  \item Close the GUI normally so the application can send \texttt{M18} and shut down the serial worker.
+  \item Switch off the main stretcher power supply.
+  \item Disconnect USB if the controller is not required to remain powered.
+  \item Clean the specimen area and inspect for fluid ingress, loose fixtures, or damage.
+\end{enumerate}
+
+% ============================================================
+\section{Software and configuration notes}
+% ============================================================
+
+This manual describes GUI software version \softwareversion. If the GUI is changed, review this manual whenever the change affects:
+\begin{itemize}
+  \item button functions or labels;
+  \item motion direction, stroke, or speed behavior;
+  \item timed stepped movement;
+  \item heater commands;
+  \item Wi-Fi connection behavior;
+  \item emergency-stop or shutdown behavior;
+  \item calibration calculations.
+\end{itemize}
+
+% ============================================================
+\section{Reference documentation}
+% ============================================================
+
+Official Duet3D documentation used for controller/network procedures:
+\begin{itemize}
+  \item \href{https://docs.duet3d.com/How_to_guides/Getting_connected/Getting_connected_to_your_Duet}{Getting connected to your Duet}
+  \item \href{https://docs.duet3d.com/en/User_manual/Machine_configuration/Networking}{Setting up networking on Duet}
+  \item \href{https://docs.duet3d.com/User_manual/Reference/Duet_Web_Control_Manual}{Duet Web Control Manual}
+  \item \href{https://docs.duet3d.com/User_manual/Reference/Gcodes}{RepRapFirmware G-code dictionary}
+\end{itemize}
+\end{document}
