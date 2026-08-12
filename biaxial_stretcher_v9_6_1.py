@@ -44,6 +44,7 @@ from PyQt6.QtCore import Qt, QTimer
 # RepRapFirmware 3.4.1 absolute minimum vector feed rate.
 RRF_MIN_VECTOR_FEEDRATE = 0.60  # mm/min
 DIRECT_MIN_SEPARATION_RATE = 2.0 * RRF_MIN_VECTOR_FEEDRATE
+GUI_VERSION = "9.6.1"
 
 # =============================================================================
 # OPERATING SYSTEM
@@ -404,7 +405,7 @@ class StretcherGUI(QMainWindow):
         self.sd_pause_state = "running"
         self.pause_started_at = 0.0
 
-        self.setWindowTitle("Biaxial Stretcher")         # Set window title
+        self.setWindowTitle(f"Biaxial Stretcher v{GUI_VERSION}")         # Set window title
         self.setFixedWidth(550)                          # Lock window width for neatness
 
         main_widget = QWidget()                          # Create a base container
@@ -448,7 +449,7 @@ class StretcherGUI(QMainWindow):
         btn_save_wifi.clicked.connect(self.save_wifi)    # Link to function
         
         wifi_ctrl_lyt = QHBoxLayout()                    # Row for WiFi Power/Reset
-        self.btn_wifi_toggle = QPushButton("WIFI: OFF")  # Power toggle
+        self.btn_wifi_toggle = QPushButton("TURN WIFI ON")  # Power toggle
         self.btn_wifi_toggle.setCheckable(True)           # Makes it a toggle (On/Off)
         self.btn_wifi_toggle.clicked.connect(self.toggle_wifi_power)
         btn_wifi_reset = QPushButton("RESET")            # WiFi Wipe button
@@ -608,15 +609,135 @@ class StretcherGUI(QMainWindow):
         self.timer.start(100)                            # Run every 0.1 seconds
 
     # ---------------- LOGIC ----------------
+    def update_ui(self):
+        """Process incoming messages from the Duet worker and update the GUI.
+        
+           Handles controller status responses, SD-job pause/resume state, timed
+           protocol progress and errors, movement completion, position and
+           temperature readouts, connection status, and console output filtering.
+           Repetitive polling messages such as coordinates, temperatures, and "ok"
+           responses are hidden from the console to keep the log readable.
+        """
+        while not self.res_queue.empty():                # Process all hardware messages in queue
+            rtype, rdata = self.res_queue.get_nowait()
+            if rtype == "DATA":
+                # Synchronize SD pause/resume state with the Duet Object Model.
+                if '"state.status"' in rdata:
+                    try:
+                        reply = json.loads(rdata)
+             
+                        if reply.get("key") == "state.status":
+                            duet_status = reply.get("result")
+             
+                            if isinstance(duet_status, str):
+                                self.sync_duet_job_state(duet_status)
+             
+                            # Hide repetitive status polling from console.
+                            continue
+             
+                    except json.JSONDecodeError:
+                        pass
+            
+                protocol_error = re.search(r"__STEP_PROTOCOL_ERROR__:(.+)", rdata)
+                if protocol_error:
+                    self.move_timer.stop()
+                    self.stepped_protocol_active = False
+                    self.protocol_total_cycles = 0
+                    self.set_motion_active(False)
+                    self.progress_bar.setValue(0)
+                    self.progress_bar.setFormat("Timed protocol error")
+                    self.console.append(
+                        f"<b style='color: #B71C1C;'>{protocol_error.group(1)}</b>"
+                    )
+                    continue
+
+                protocol_start = re.search(r"__STEP_PROTOCOL_START__:(\d+)", rdata)
+                if protocol_start:
+                    self.protocol_total_cycles = int(protocol_start.group(1))
+                    self.stepped_protocol_active = True
+                    self.progress_bar.setValue(0)
+                    self.progress_bar.setFormat(
+                        f"Stepped stretch: 0/{self.protocol_total_cycles}"
+                    )
+                    continue
+
+                protocol_progress = re.search(r"__STEP_PROGRESS__:(\d+)/(\d+)", rdata)
+                if protocol_progress:
+                    completed = int(protocol_progress.group(1))
+                    total = int(protocol_progress.group(2))
+                    self.protocol_total_cycles = total
+                    percentage = round((completed / total) * 100) if total else 0
+                    self.progress_bar.setValue(max(0, min(99, percentage)))
+                    self.progress_bar.setFormat(
+                        f"Stepped stretch: {completed}/{total}"
+                    )
+                    continue
+
+                # Duet reports this only after M400 confirms movement completion.
+                if "__MOVE_DONE__" in rdata:
+                    self.finish_movement()
+                    continue
+            
+                m_pos = re.search(r"X:\s*([-+]?\d*\.\d+|\d+)", rdata)
+                if m_pos:
+                    m_y = re.search(r"Y:\s*([-+]?\d*\.\d+|\d+)", rdata)
+                    self.pos_display.setText(f"X: {m_pos.group(1)} | Y: {m_y.group(1) if m_y else '0.00'}")
+                
+                m_temp = re.search(r"B:\s*([-+]?\d*\.\d+|\d+)", rdata) # Find Bed Temp using Regex
+                if m_temp: self.temp_display.setText(f"Temp: {m_temp.group(1)}°C")
+                
+                # SPAM FILTER: Only print to console if it's NOT coordinates or "ok"
+                is_spam = any(x in rdata for x in ["ok", "X:", "Y:", "Z:", "T:0", "B:"])
+                if not is_spam: self.console.append(rdata) # Add line to log box
+                
+            elif rtype == "STATUS":
+                self.console.append(f"<b>>>> {rdata}</b>")
+            
+                if "CONNECTED" in rdata:
+                    self.set_estop_normal_style()
+                    self.btn_estop.setEnabled(True)
+            
+                if ("CONNECTED" in rdata
+                    or "RESET" in rdata
+                    or "OFFLINE" in rdata
+                    or "SD UPLOAD ERROR" in rdata):
+                    self.reset_progress_ui()
+            self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum()) # Auto-scroll
+    
+    # CLOSING    
+    def closeEvent(self, event):                         # Runs when user clicks [X]
+        """Turn off the motors before closing the application."""
+        self.cmd_queue.put(("SHUTDOWN", "KILL"))         # Ask the serial worker to send M18 first.
+        self.stop_event.wait(timeout=1.0)                # Wait until the worker has sent M18 and closed the serial port.
+    
+        event.accept()
+
+    # CONNECT
     def toggle_wifi_power(self):
         st = "1" if self.btn_wifi_toggle.isChecked() else "0"
         self.cmd_queue.put(("GCODE", f"M552 S{st}"))      # M552 S1 turns on WiFi module
-        self.btn_wifi_toggle.setText(f"WIFI: {'ON' if st == '1' else 'OFF'}")
-        self.btn_wifi_toggle.setStyleSheet("background-color: #C8E6C9;" if st == "1" else "")
+        self.btn_wifi_toggle.setText("TURN WIFI OFF" if st == "1" else "TURN WIFI ON")
+        self.btn_wifi_toggle.setStyleSheet("background-color: #64B5F6; color: white" if st == "1" else "")
 
+    # WiFi
     def reset_wifi_module(self):
-        self.cmd_queue.put(("GCODE", "M552 S-1\nM588 S\"*\"\nG4 P500\nM552 S0")) # Wipe all saved WiFis
-
+        self.cmd_queue.put((
+            "GCODE",
+            'M552 S0\n'   # start/initialize the WiFi module but leave networking disabled.
+            'G4 P500\n'   # give it 500 ms to settle.
+            'M588 S"*"\n' # erase all remembered WiFi networks.
+            'G4 P500\n'   # allow the erase operation to finish.
+            'M552 S-1'    # completely disable the WiFi module afterward.
+        ))  # Wipe all stored WiFi
+        
+        self.btn_wifi_toggle.setChecked(False)
+        self.btn_wifi_toggle.setText("TURN WIFI ON")
+        self.btn_wifi_toggle.setStyleSheet("")
+     
+    def save_wifi(self):
+        self.cmd_queue.put(("GCODE", f"M552 S0\nM587 S\"{self.ssid.text()}\" P\"{self.pw.text()}\"\nM552 S1"))
+      
+    # CALIBRATION
     def show_cal_help(self):
         msg = QMessageBox(self)
         msg.setWindowTitle("How to Calibrate Motors")
@@ -638,10 +759,27 @@ class StretcherGUI(QMainWindow):
         msg.setText(text)
         msg.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg.exec()
-        
-    def save_wifi(self):
-        self.cmd_queue.put(("GCODE", f"M552 S0\nM587 S\"{self.ssid.text()}\" P\"{self.pw.text()}\"\nM552 S1"))
-    
+     
+    def run_calibration(self, ax):
+        """Scale the current live M92 value instead of using hard-coded defaults."""
+        measured = self.meas_in.value()
+        if measured <= 0:
+            return
+
+        axis_index = {"X": 0, "Y": 1}[ax]
+        scale = self.total_target / measured
+        command = (
+            f"M92 {ax}{{move.axes[{axis_index}].stepsPerMm * {scale:.8f}}}\n"
+            "M92"
+        )
+        self.cmd_queue.put(("GCODE", command))
+        self.console.append(
+            f"<b>CALIBRATION: scaling current {ax} steps/mm by {scale:.6f}. "
+            "The following M92 response reports the new live value.</b>"
+        )
+
+   
+    # STOPPING AND PAUSING    
     def emergency_stop(self):
         """Send M112 and tell the user how to recover the Duet."""
         self.cmd_queue.put(("ESTOP", "KILL"))
@@ -651,6 +789,39 @@ class StretcherGUI(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("EMERGENCY STOPPED")
     
+    def set_estop_normal_style(self):
+        """Restore the normal emergency-stop button appearance."""
+    
+        self.btn_estop.setText("HARD EMERGENCY STOP (M112)")
+        self.btn_estop.setEnabled(True)
+    
+        self.btn_estop.setStyleSheet("""QPushButton {background-color: #B71C1C;
+                                                     color: white;
+                                                     font-weight: bold;
+                                                     height: 45px;
+                                                     border-radius: 5px;}
+    
+                                        QPushButton:hover {background-color: #E53935;}
+                                
+                                        QPushButton:pressed {background-color: #FFF3E0;}""")
+    
+    
+    def set_estop_triggered_style(self):
+        """Show that M112 was triggered and PanelDue STOP is required."""
+    
+        self.btn_estop.setText("EMERGENCY STOPPED - PRESS STOP ON PANEL DUE BEFORE RECONNECTING")
+        self.btn_estop.setEnabled(False)
+    
+        self.btn_estop.setStyleSheet("""QPushButton {background-color: #FFF3E0;
+                                                     color: #D84315;
+                                                     font-weight: bold;
+                                                     height: 45px;
+                                                     border-radius: 5px;}
+                                        
+                                            QPushButton:disabled {background-color: #FFF3E0;
+                                                                  color: #D84315;}""")
+    
+    # MOVEMENT
     def set_motion_active(self, active):
         """Lock motion settings while a controller job is active."""
         self.motion_active = active
@@ -1224,143 +1395,7 @@ M118 P1 S"__MOVE_DONE__" L0'''
         self.total_target = self.slider.value()/100.0     # Slider 100 -> 1.00 mm separation
         self.dist_label.setText(f"Stroke: {self.total_target:.2f}mm")
         self.update_protocol_summary()
-
-    def run_calibration(self, ax):
-        """Scale the current live M92 value instead of using hard-coded defaults."""
-        measured = self.meas_in.value()
-        if measured <= 0:
-            return
-
-        axis_index = {"X": 0, "Y": 1}[ax]
-        scale = self.total_target / measured
-        command = (
-            f"M92 {ax}{{move.axes[{axis_index}].stepsPerMm * {scale:.8f}}}\n"
-            "M92"
-        )
-        self.cmd_queue.put(("GCODE", command))
-        self.console.append(
-            f"<b>CALIBRATION: scaling current {ax} steps/mm by {scale:.6f}. "
-            "The following M92 response reports the new live value.</b>"
-        )
-
-    def update_ui(self):
-        while not self.res_queue.empty():                # Process all hardware messages in queue
-            rtype, rdata = self.res_queue.get_nowait()
-            if rtype == "DATA":
-                # Synchronize SD pause/resume state with the Duet Object Model.
-                if '"state.status"' in rdata:
-                    try:
-                        reply = json.loads(rdata)
-             
-                        if reply.get("key") == "state.status":
-                            duet_status = reply.get("result")
-             
-                            if isinstance(duet_status, str):
-                                self.sync_duet_job_state(duet_status)
-             
-                            # Hide repetitive status polling from console.
-                            continue
-             
-                    except json.JSONDecodeError:
-                        pass
-            
-                protocol_error = re.search(r"__STEP_PROTOCOL_ERROR__:(.+)", rdata)
-                if protocol_error:
-                    self.move_timer.stop()
-                    self.stepped_protocol_active = False
-                    self.protocol_total_cycles = 0
-                    self.set_motion_active(False)
-                    self.progress_bar.setValue(0)
-                    self.progress_bar.setFormat("Timed protocol error")
-                    self.console.append(
-                        f"<b style='color: #B71C1C;'>{protocol_error.group(1)}</b>"
-                    )
-                    continue
-
-                protocol_start = re.search(r"__STEP_PROTOCOL_START__:(\d+)", rdata)
-                if protocol_start:
-                    self.protocol_total_cycles = int(protocol_start.group(1))
-                    self.stepped_protocol_active = True
-                    self.progress_bar.setValue(0)
-                    self.progress_bar.setFormat(
-                        f"Stepped stretch: 0/{self.protocol_total_cycles}"
-                    )
-                    continue
-
-                protocol_progress = re.search(r"__STEP_PROGRESS__:(\d+)/(\d+)", rdata)
-                if protocol_progress:
-                    completed = int(protocol_progress.group(1))
-                    total = int(protocol_progress.group(2))
-                    self.protocol_total_cycles = total
-                    percentage = round((completed / total) * 100) if total else 0
-                    self.progress_bar.setValue(max(0, min(99, percentage)))
-                    self.progress_bar.setFormat(
-                        f"Stepped stretch: {completed}/{total}"
-                    )
-                    continue
-
-                # Duet reports this only after M400 confirms movement completion.
-                if "__MOVE_DONE__" in rdata:
-                    self.finish_movement()
-                    continue
-            
-                m_pos = re.search(r"X:\s*([-+]?\d*\.\d+|\d+)", rdata)
-                if m_pos:
-                    m_y = re.search(r"Y:\s*([-+]?\d*\.\d+|\d+)", rdata)
-                    self.pos_display.setText(f"X: {m_pos.group(1)} | Y: {m_y.group(1) if m_y else '0.00'}")
-                
-                m_temp = re.search(r"B:\s*([-+]?\d*\.\d+|\d+)", rdata) # Find Bed Temp using Regex
-                if m_temp: self.temp_display.setText(f"Temp: {m_temp.group(1)}°C")
-                
-                # SPAM FILTER: Only print to console if it's NOT coordinates or "ok"
-                is_spam = any(x in rdata for x in ["ok", "X:", "Y:", "Z:", "T:0", "B:"])
-                if not is_spam: self.console.append(rdata) # Add line to log box
-                
-            elif rtype == "STATUS":
-                self.console.append(f"<b>>>> {rdata}</b>")
-            
-                if "CONNECTED" in rdata:
-                    self.set_estop_normal_style()
-                    self.btn_estop.setEnabled(True)
-            
-                if ("CONNECTED" in rdata
-                    or "RESET" in rdata
-                    or "OFFLINE" in rdata
-                    or "SD UPLOAD ERROR" in rdata):
-                    self.reset_progress_ui()
-            self.console.verticalScrollBar().setValue(self.console.verticalScrollBar().maximum()) # Auto-scroll
-    
-    def set_estop_normal_style(self):
-        """Restore the normal emergency-stop button appearance."""
-    
-        self.btn_estop.setText("HARD EMERGENCY STOP (M112)")
-        self.btn_estop.setEnabled(True)
-    
-        self.btn_estop.setStyleSheet("""QPushButton {background-color: #B71C1C;
-                                                     color: white;
-                                                     font-weight: bold;
-                                                     height: 45px;
-                                                     border-radius: 5px;}
-    
-                                        QPushButton:hover {background-color: #E53935;}
-                                
-                                        QPushButton:pressed {background-color: #FFF3E0;}""")
-    
-    
-    def set_estop_triggered_style(self):
-        """Show that M112 was triggered and PanelDue STOP is required."""
-    
-        self.btn_estop.setText("EMERGENCY STOPPED - PRESS STOP ON PANEL DUE BEFORE RECONNECTING")
-        self.btn_estop.setEnabled(False)
-    
-        self.btn_estop.setStyleSheet("""QPushButton {background-color: #FFF3E0;
-                                                     color: #D84315;
-                                                     font-weight: bold;
-                                                     height: 45px;
-                                                     border-radius: 5px;}
-                                        
-                                            QPushButton:disabled {background-color: #FFF3E0;
-                                                                  color: #D84315;}""")
+ 
     
     def advance_progress(self):
         if self.expected_duration <= 0:  # avoid divsion by 0
@@ -1415,13 +1450,7 @@ M118 P1 S"__MOVE_DONE__" L0'''
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("Idle")
         
-    def closeEvent(self, event):                         # Runs when user clicks [X]
-        """Turn off the motors before closing the application."""
-        self.cmd_queue.put(("SHUTDOWN", "KILL"))         # Ask the serial worker to send M18 first.
-        self.stop_event.wait(timeout=1.0)                # Wait until the worker has sent M18 and closed the serial port.
-    
-        event.accept()
-
+   
 if __name__ == "__main__":
     multiprocessing.freeze_support()                     # Support for .exe bundling
     q1, q2, ev = multiprocessing.Queue(), multiprocessing.Queue(), multiprocessing.Event()
