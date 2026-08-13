@@ -529,20 +529,277 @@ Use the console when diagnosing:
 \section{Using Duet Web Control}
 % ============================================================
 
-DWC is useful for controller-level diagnostics and configuration that are intentionally not exposed in the simplified stretcher GUI.
+Duet Web Control (DWC) provides direct access to the Duet controller through
+a web browser. It is useful for controller-level diagnostics, configuration,
+file management, and operations that are intentionally not exposed in the
+simplified stretcher GUI.
 
 Typical uses include:
 \begin{itemize}
-  \item viewing controller state and temperatures;
-  \item sending diagnostic G-code from the Console page;
-  \item checking network state with \texttt{M552};
+  \item viewing controller state, positions, and temperatures;
+  \item sending diagnostic G-code commands from the \textbf{Console};
+  \item checking network state using \texttt{M552};
   \item inspecting or editing \texttt{config.g};
-  \item viewing files stored on the Duet SD card;
-  \item reviewing heater configuration and tuning;
-  \item checking firmware and machine configuration.
+  \item viewing and managing files stored on the Duet SD card;
+  \item creating, editing, and running macros;
+  \item reviewing heater, motor, and machine configuration;
+  \item checking firmware and controller information.
 \end{itemize}
 
-\warningbox{DWC provides lower-level control than the custom GUI. Editing configuration or sending arbitrary G-code can change motion, heater, network, and safety behavior. Restrict configuration changes to trained users.}
+\warningbox{DWC provides lower-level control than the custom GUI. Commands
+entered in the Console and changes made to configuration or macro files can
+cause immediate motor movement, heater operation, or changes to controller
+behaviour. Only trained users should make such changes.}
+
+% ------------------------------------------------------------
+\subsection{The main DWC pages}
+% ------------------------------------------------------------
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{DuetWebControl_arrows.png}
+    \caption{DWC main pages.}
+    \label{fig:dwc-arrows}
+\end{figure}
+
+The exact appearance of Duet Web Control depends on the DWC
+version, but the most useful areas for operating and maintaining the
+stretcher are:
+
+\begin{description}[style=nextline,leftmargin=4.2cm,labelwidth=3.7cm]
+  \item[Dashboard]
+  Shows the current machine state and provides controller-level movement
+  and heater controls.
+
+  \item[Console]
+  Allows G-code commands to be sent directly to RepRapFirmware and displays
+  the controller response.
+
+  \item[Macros]
+  Displays user-defined macro files stored in the Duet's
+  \texttt{/macros/} directory. Macros can be created, edited, uploaded,
+  organised, and executed from this page.
+  
+  \item[Jobs / Files]
+  Provides access to G-code jobs and other files stored on the SD card.
+
+  \item[System]
+  Provides access to system configuration files stored in the
+  \texttt{/sys/} directory, including \texttt{config.g}.
+\end{description}
+
+% ------------------------------------------------------------
+\subsection{User macros}
+% ------------------------------------------------------------
+
+A macro is a text file containing one or more G-code commands that can be
+executed as a sequence. Macros are useful when the same controller operation
+needs to be performed repeatedly.
+
+Normal user macros are stored in:
+
+\begin{verbatim}
+/macros/
+\end{verbatim}
+
+The filename is used as the macro name displayed in Duet Web Control and \textbf{on PanelDue}. Subdirectories may be used to organise a
+larger number of macros.
+
+\notebox{Do not confuse normal user macros in \texttt{/macros/} with system
+files in \texttt{/sys/}. Files in \texttt{/sys/}, such as
+\texttt{config.g}, homing files, pause/resume files, and other system
+macros, can affect fundamental machine behaviour.}
+
+% ------------------------------------------------------------
+\subsection{Creating a new macro in DWC}
+% ------------------------------------------------------------
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\textwidth]{DuetWebControl_arrows.png}
+    \caption{DWC main pages/areas (orange arrows) and how to create a new (macro) file (cyan arrow).}
+    \label{fig:dwc-arrows}
+\end{figure}
+
+To create a new macro:
+
+\begin{enumerate}
+  \item Open Duet Web Control as described in
+        \hyperref[sec:duet-web-control]{Opening Duet Web Control}.
+  \item Open the \textbf{Macros} page.
+  \item Select \textbf{New File} (Fig.~\ref{fig:fig:dwc-arrows}).
+  \item Enter a descriptive filename for the macro.
+  \item Enter the required G-code commands into the editor.
+  \item Save the file.
+  \item Confirm that the new macro appears in the macro list.
+\end{enumerate}
+
+For example, a diagnostic macro named
+\texttt{Stretcher Status.g} could contain:
+
+\begin{verbatim}
+; Stretcher Status
+; Report current position
+M114
+
+; Report heater temperature
+M105
+
+; Report network state
+M552
+\end{verbatim}
+
+Lines beginning with a semicolon (\texttt{;}) are comments and can be used
+to document what the macro is intended to do.
+
+\notebox{When creating a new macro, begin with commands that do not cause
+motion or heating whenever possible. Verify the macro from the Console
+output before adding commands that actuate the machine.}
+
+% ------------------------------------------------------------
+\subsection{Editing an existing macro}
+% ------------------------------------------------------------
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.4\textwidth]{DuetWebControl_edit_existing_file.png}
+    \caption{Right click on existing file opens up the drop down menu.}
+    \label{fig:dwc-edit-file}
+\end{figure}
+
+Existing user macros can be edited directly from Duet Web Control.
+
+\begin{enumerate}
+  \item Open the \textbf{Macros} page.
+  \item Locate the required macro.
+  \item Open the macro's context menu using R-mouse-click and select \textbf{Edit File} (Fig.~\ref{fig:dwc-edit-file}).
+  \item Review the existing commands before making changes.
+  \item Modify the required G-code.
+  \item Save the file.
+  \item Re-open the file if necessary and verify that the intended changes
+        were saved correctly.
+  \item Test the macro with the stretcher in a safe mechanical state.
+\end{enumerate}
+
+\warningbox{Saving a macro changes the copy stored on the Duet SD card.
+There is no automatic check that a movement command is mechanically safe
+for the stretcher. Carefully check axis letters, movement direction,
+distance, feed rate, and heater commands before executing an edited macro.}
+
+For important macros, it is recommended to keep a known-good backup before
+making changes. A macro can be downloaded from DWC and retained on the
+computer before the SD-card version is edited.
+
+% ------------------------------------------------------------
+\subsection{Running a macro}
+% ------------------------------------------------------------
+
+To execute a user macro, there are two normal options:
+
+\begin{enumerate}
+  \item \textbf{Run the macro from Duet Web Control}
+
+  \begin{enumerate}
+    \item Open the \textbf{Macros} page in DWC.
+    \item Locate the required macro.
+    \item Select the macro.
+    \item R-click and select \textbf{Run Macro} (Fig.~\ref{fig:dwc-edit-file}).
+  \end{enumerate}
+
+  \item \textbf{Run the macro from PanelDue}
+
+  \begin{enumerate}
+    \item Open the \textbf{Macros} menu on the PanelDue.
+    \item Locate the required macro.
+    \item Select the macro by pressing it on the screen.
+  \end{enumerate}
+\end{enumerate}
+
+\notebox{The same macro file is used whether it is started from Duet Web
+Control or from PanelDue. Changes made to a macro in DWC therefore also
+affect the version available from PanelDue.}
+
+A macro can also be called from another G-code file or from the DWC Console
+using \texttt{M98}. For example:
+
+\begin{verbatim}
+M98 P"/macros/Stretcher Status.g"
+\end{verbatim}
+
+This executes the commands stored in the specified macro file.
+
+\warningbox{Do not run an unfamiliar macro simply to determine what it
+does. Open the file and inspect its contents first. A macro may contain
+movement, heater, configuration, or emergency-control commands.}
+
+
+% ------------------------------------------------------------
+\subsection{Changing \texttt{config.g}}
+% ------------------------------------------------------------
+
+The main RepRapFirmware machine configuration is stored in
+\texttt{/sys/config.g}. It can be viewed and edited from the
+\textbf{System} page in Duet Web Control.
+
+One relevant example for the stretcher is calibration. The GUI calibration
+function changes the live X or Y steps-per-mm value using \texttt{M92}, but
+the change is not automatically written to the permanent configuration.
+After confirming the calibrated value, the corresponding \texttt{M92}
+command in \texttt{config.g} can be updated so that the value is restored
+when the Duet starts.
+
+Before changing \texttt{config.g}:
+
+\begin{enumerate}
+  \item Open the \textbf{System} page.
+  \item Download or otherwise record the current \texttt{config.g} as a
+        backup.
+  \item Open \texttt{config.g} in the DWC editor.
+  \item Locate the command that requires modification.
+  \item Change only the required parameter.
+  \item Save the file.
+  \item Restart the Duet when appropriate and verify the resulting
+        configuration before operating the stretcher normally.
+\end{enumerate}
+
+For example, if calibration establishes that the required X-axis value is
+\texttt{X1600}, only the appropriate parameter in the existing
+\texttt{M92} line should be changed. Do not copy this example value unless
+it is the value established for the actual machine.
+
+\warningbox{An incorrect \texttt{config.g} can change motor scaling,
+directions, current limits, heaters, sensors, networking, and other
+fundamental controller settings. Always retain a known-good copy before
+editing the configuration.}
+
+% ------------------------------------------------------------
+\subsection{Using the DWC Console}
+% ------------------------------------------------------------
+
+The DWC \textbf{Console} is useful for testing individual G-code commands
+before placing them into a macro.
+
+For example:
+
+\begin{verbatim}
+M552
+\end{verbatim}
+
+reports the current network state, while:
+
+\begin{verbatim}
+M92
+\end{verbatim}
+
+reports the currently configured steps-per-mm values.
+
+Testing individual diagnostic commands in the Console can help distinguish
+a problem with a particular G-code command from a problem with the macro
+file itself.
+
+\warningbox{Commands entered in the DWC Console are sent directly to the
+controller. Movement or heater commands may take effect immediately after
+they are submitted.}
 
 % ============================================================
 \section{Troubleshooting}
